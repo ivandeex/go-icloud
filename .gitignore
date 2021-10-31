@@ -5,4 +5,5 @@
 *.dylib
 *.test
 *.out
+*.log
 build

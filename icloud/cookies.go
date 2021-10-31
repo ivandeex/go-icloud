@@ -9,15 +9,19 @@ import (
 	netscapeCookieJar "github.com/vanym/golang-netscape-cookiejar"
 )
 
-func setupCookieJar(subJar *cookiejar.Jar, path string) (*netscapeCookieJar.Jar, error) {
+func newCookieJar(path string) (*netscapeCookieJar.Jar, error) {
+	baseJar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot create basic cookie jar")
+	}
 	opt := netscapeCookieJar.Options{
-		SubJar:        subJar,
+		SubJar:        baseJar,
 		AutoWritePath: path,
 		WriteHeader:   true,
 	}
 	jar, err := netscapeCookieJar.New(&opt)
 	if err != nil {
-		return nil, errors.Wrapf(err, "cannot create cookie jar")
+		return nil, errors.Wrapf(err, "cannot create netscape cookie jar")
 	}
 	file, err := os.Open(path)
 	if err == nil {
@@ -28,7 +32,7 @@ func setupCookieJar(subJar *cookiejar.Jar, path string) (*netscapeCookieJar.Jar,
 		if !os.IsNotExist(err) {
 			return nil, err
 		}
-		log.Debugf("cookie file not found: %s", path)
+		log.Debugf("Cookie file not found: %s", path)
 	}
 	return jar, nil
 }

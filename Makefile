@@ -1,4 +1,4 @@
-all: build
+all: fmt lint build
 
 build:
 	go build -o build/icloud ./cmd/icloud
@@ -8,5 +8,8 @@ test:
 
 lint:
 	golangci-lint run ./...
+
+fmt:
+	gofmt -w $$(find ./cmd ./icloud -type d)
 
 .PHONY: all build

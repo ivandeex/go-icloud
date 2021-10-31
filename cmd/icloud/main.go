@@ -57,16 +57,26 @@ func rootMain(command *cobra.Command, _ []string) error {
 		level = log.TraceLevel
 	}
 	log.SetLevel(level)
+	log.SetFormatter(&log.TextFormatter{
+		ForceColors:     true,
+		DisableQuote:    true,
+		PadLevelText:    true,
+		FullTimestamp:   true,
+		TimestampFormat: "15:04:05.999",
+	})
+	icloud.Debug = level >= log.DebugLevel
 
 	if username == "" || password == "" {
 		return errors.New("username or password was not supplied")
 	}
 
 	api, err := icloud.New(username, password)
+	if err == nil {
+		err = api.Authenticate(false, "")
+	}
 	if err != nil {
 		return err
 	}
-	log.Debugf("api = %#v", api)
 
 	return nil
 }

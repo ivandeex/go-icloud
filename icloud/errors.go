@@ -24,8 +24,7 @@ func NewErrAPIResponse(code int, status string, reason string, retry bool) ErrAP
 	msg := reason
 	if status != "" {
 		msg = fmt.Sprintf("%s (%s)", msg, status)
-	}
-	if code != 0 {
+	} else if code != 0 {
 		msg = fmt.Sprintf("%s (%d)", msg, code)
 	}
 	if retry {
