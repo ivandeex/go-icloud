@@ -114,11 +114,15 @@ func (c *Client) post(url string, data interface{}, hdr dict, res interface{}) e
 // request will send a get/post request with retries
 func (c *Client) request(method, url string, data interface{}, hdr dict, out interface{}, retried bool) ([]byte, error) {
 	var (
+		rd    io.Reader
 		in    []byte
 		inStr string
 		err   error
 	)
 	switch d := data.(type) {
+	case io.Reader:
+		rd = d
+		inStr = "stream"
 	case []byte:
 		in = d
 		inStr = string(d)
@@ -132,6 +136,9 @@ func (c *Client) request(method, url string, data interface{}, hdr dict, out int
 			in, err = json.Marshal(d)
 			inStr = string(Marshal(d))
 		}
+	}
+	if rd == nil {
+		rd = bytes.NewBuffer(in)
 	}
 
 	sep := "?"
@@ -147,7 +154,7 @@ func (c *Client) request(method, url string, data interface{}, hdr dict, out int
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(in))
+	req, err := http.NewRequest(method, url, rd)
 	if err != nil {
 		return nil, err
 	}
@@ -173,6 +180,12 @@ func (c *Client) request(method, url string, data interface{}, hdr dict, out int
 	}
 	log.Tracef("Saved session data to file %s", c.sessPath)
 	log.Tracef("Cookies saved aitomatically")
+
+	if streamPtr, wantStream := out.(*io.ReadCloser); wantStream {
+		log.Debugf("streaming data from url %q", url)
+		*streamPtr = res.Body
+		return nil, nil
+	}
 
 	code := res.StatusCode
 	strCode := strconv.Itoa(code)
@@ -220,17 +233,31 @@ func (c *Client) request(method, url string, data interface{}, hdr dict, out int
 	if err = c.decodeError(body); err != nil {
 		return nil, err
 	}
+
 	if log.IsLevelEnabled(log.DebugLevel) {
-		var d dict
-		if err = json.Unmarshal(body, &d); err != nil || d == nil {
-			log.Warn("Failed to parse JSON response")
-			return nil, err
+		var (
+			d dict
+			a []dict
+			b []byte
+			t string
+		)
+		if err = json.Unmarshal(body, &d); err == nil || d != nil {
+			b = Marshal(d)
+			t = "dict"
+		} else if err = json.Unmarshal(body, &a); err == nil || a != nil {
+			b = Marshal(a)
+			t = "array"
 		}
-		log.Debugf("json response: %s", Marshal(d))
+		if t != "" {
+			log.Debugf("JSON %s response: %s", t, string(b))
+		} else {
+			log.Warnf("Invalid JSON response: %s", string(body))
+		}
 	}
+
 	if out != nil {
 		if err = json.Unmarshal(body, out); err != nil {
-			log.Error("Failed to parse JSON response")
+			log.Errorf("Failed to parse JSON into %T: %s", out, string(body))
 			return nil, err
 		}
 	}

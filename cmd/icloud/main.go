@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"regexp"
 
 	"github.com/ivandeex/go-icloud/icloud"
 	icloudapi "github.com/ivandeex/go-icloud/icloud/api"
@@ -112,5 +113,54 @@ func rootMain(command *cobra.Command, _ []string) error {
 	}
 
 	log.Infof("Successfully authenticated")
-	return nil
+
+	drive, err := icloud.NewDrive(api)
+	if err != nil {
+		return errors.Wrap(err, "connecting to drive service")
+	}
+	root, err := drive.Root()
+	if err != nil {
+		return errors.Wrap(err, "obtaining drive root")
+	}
+	dir, _ := root.Dir()
+	log.Infof("root name %q type %q dir %q", root.Name(), root.Type(), dir)
+	if len(dir) == 0 {
+		return errors.New("root folder is empty")
+	}
+
+	subdir, err := root.Get(dir[0])
+	if err != nil {
+		return errors.Wrapf(err, "cannot read subdir %q", dir[0])
+	}
+	dir, _ = subdir.Dir()
+	log.Infof("subdir name %q dir %q", subdir.Name(), dir)
+	if len(dir) == 0 {
+		return errors.Errorf("folder %q is empty", subdir.Name())
+	}
+
+	name, path := dir[0], "test.log"
+	file, err := subdir.Get(name)
+	if err != nil {
+		return errors.Wrapf(err, "file %q not found in folder %q", name, subdir.Name())
+	}
+	err = file.Download(path)
+	if err != nil {
+		return errors.Wrapf(err, "cannot download %q", name)
+	}
+	log.Infof("saved %q into %q", name, path)
+
+	reLog := regexp.MustCompile(`^test.*\.log$`)
+	for _, name := range dir {
+		if reLog.MatchString(name) {
+			file, err = subdir.Get(name)
+			if err == nil {
+				err = file.Delete()
+			}
+			log.Infof("removing %q returns %v", name, err)
+		}
+	}
+	err = subdir.Upload(path)
+	log.Infof("uploading %q returns %v", path, err)
+
+	return err
 }
