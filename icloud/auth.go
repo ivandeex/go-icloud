@@ -1,6 +1,8 @@
 package icloud
 
 import (
+	"github.com/ivandeex/go-icloud/icloud/api"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -12,21 +14,14 @@ func (c *Client) Authenticate(force_refresh bool, service string) (err error) {
 	if c.session.SessionToken != "" && !force_refresh {
 		c.data, err = c.validateToken()
 		if err != nil {
-			log.Debugf("Invalid authentication token, will log in from scratch: %v", err)
+			log.Debugf("Will log in from scratch: %v", err)
 		} else {
 			success = true
 		}
 	}
 
 	if !success && service != "" {
-		// TODO
-		appsRaw := c.data["apps"]
-		apps := appsRaw.(dict)
-		appRaw := apps[service]
-		app := appRaw.(dict)
-		canLaunchWithOneFactorRaw := app["canLaunchWithOneFactor"]
-		canLaunchWithOneFactor := canLaunchWithOneFactorRaw.(bool)
-		if canLaunchWithOneFactor {
+		if allows1F, _ := c.data.Apps.AllowsOneFactor(service); allows1F {
 			log.Debugf("Authenticating as %s for %s", c.accountName, service)
 			err = c.authenticateWithCredentialsService(service)
 			if err != nil {
@@ -52,13 +47,7 @@ func (c *Client) Authenticate(force_refresh bool, service string) (err error) {
 			"trustTokens": trustTokens,
 		}
 
-		hdr := c.getAuthHeaders(nil)
-		if c.session.SCnt != "" {
-			hdr["scnt"] = c.session.SCnt
-		}
-		if c.session.SessionID != "" {
-			hdr["X-Apple-ID-Session-Id"] = c.session.SessionID
-		}
+		hdr := c.getAuthHeaders(true)
 
 		if err = c.post(AuthEndpoint+"/signin?isRememberMeEnabled=true", data, hdr, nil); err != nil {
 			return ErrLoginFailed // "Invalid email/password combination."
@@ -80,7 +69,7 @@ func (c *Client) authenticateWithToken() error {
 		"extended_login":     true,
 		"trustToken":         c.session.TrustToken,
 	}
-	var res dict
+	var res *api.StateResponse
 	if err := c.post(SetupEndpoint+"/accountLogin", data, nil, &res); err != nil {
 		return ErrLoginFailed
 	}
@@ -89,87 +78,151 @@ func (c *Client) authenticateWithToken() error {
 }
 
 // Authenticate to a specific service using credentials.
-func (c *Client) authenticateWithCredentialsService(service string) (err error) {
+func (c *Client) authenticateWithCredentialsService(service string) error {
 	data := dict{
 		"appName":  service,
 		"apple_id": c.accountName,
 		"password": c.password,
 	}
-	if err = c.post(SetupEndpoint+"/accountLogin", data, nil, nil); err != nil {
+	err := c.post(SetupEndpoint+"/accountLogin", data, nil, nil)
+	if err != nil {
 		return ErrLoginFailed
 	}
 	c.data, err = c.validateToken()
-	return err
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // validateToken checks if the current access token is still valid.
-func (c *Client) validateToken() (dict, error) {
+func (c *Client) validateToken() (*api.StateResponse, error) {
 	log.Debugf("Checking session token validity")
-	var res dict
-	err := c.post(SetupEndpoint+"/validate", nil, nil, &res)
-	log.Debugf("validateToken got err:%v res:%s", err, Marshal(res))
-	if err != nil {
-		log.Debugf("Invalid authentication token")
+	var res *api.StateResponse
+	if err := c.post(SetupEndpoint+"/validate", nil, nil, &res); err != nil {
+		log.Debugf("Invalid authentication token: %v", err)
 		return nil, err
 	}
 	log.Debugf("Session token is still valid")
 	return res, nil
 }
 
-func (c *Client) getAuthHeaders(overrides dict) dict {
-	h := dict{
-		"Accept":                           "*/*",
-		"Content-Type":                     "application/json",
-		"X-Apple-OAuth-Client-Id":          "d39ba9916b7251055b22c7f910e2ea796ee65e98b2ddecea8f5dde8d9d1a815d",
-		"X-Apple-OAuth-Client-Type":        "firstPartyAuth",
-		"X-Apple-OAuth-Redirect-URI":       "https://www.icloud.com",
-		"X-Apple-OAuth-Require-Grant-Code": "true",
-		"X-Apple-OAuth-Response-Mode":      "web_message",
-		"X-Apple-OAuth-Response-Type":      "code",
-		"X-Apple-OAuth-State":              c.session.ClientID,
-		"X-Apple-Widget-Key":               "d39ba9916b7251055b22c7f910e2ea796ee65e98b2ddecea8f5dde8d9d1a815d",
+// getAuthHeaders returns actual authentication headers
+func (c *Client) getAuthHeaders(useSession bool) dict {
+	const OauthKey = "d39ba9916b7251055b22c7f910e2ea796ee65e98b2ddecea8f5dde8d9d1a815d"
+	h := dict{}
+	h["Accept"] = "*/*"
+	h["Content-Type"] = "application/json"
+	h["X-Apple-Widget-Key"] = OauthKey
+	h["X-Apple-OAuth-Client-Id"] = OauthKey
+	h["X-Apple-OAuth-Client-Type"] = "firstPartyAuth"
+	h["X-Apple-OAuth-Redirect-URI"] = "https://www.icloud.com"
+	h["X-Apple-OAuth-Require-Grant-Code"] = "true"
+	h["X-Apple-OAuth-Response-Mode"] = "web_message"
+	h["X-Apple-OAuth-Response-Type"] = "code"
+	h["X-Apple-OAuth-State"] = c.session.ClientID
+	if useSession && c.session.SCnt != "" {
+		h["scnt"] = c.session.SCnt
 	}
-	for k, v := range overrides {
-		h[k] = v
+	if useSession && c.session.SessionID != "" {
+		h["X-Apple-ID-Session-Id"] = c.session.SessionID
 	}
 	return h
 }
 
-// Requires2FA returns true if 2-factor auth is required
+// Requires2FA returns true if 2-factor authentication is required.
 func (c *Client) Requires2FA() bool {
-	return false
+	return c.data.DsInfo.HsaVersion == 2 && (c.data.HsaChallengeRequired || !c.IsTrustedSession())
 }
 
-// Requires2SA returns true if 2-step auth is required
+// Requires2SA returns true if 2-step authentication is required.
 func (c *Client) Requires2SA() bool {
-	return false
+	return c.data.DsInfo.HsaVersion >= 1 && (c.data.HsaChallengeRequired || !c.IsTrustedSession())
 }
 
-func (c *Client) Verify2FACode(code string) (bool, error) {
-	return false, nil
+// Validate2FACode verifies a code received via Apple's 2FA system (HSA2).
+func (c *Client) Validate2FACode(code string) error {
+	data := dict{
+		"securityCode": dict{
+			"code": code,
+		},
+	}
+	hdr := c.getAuthHeaders(true)
+	hdr["Accept"] = "application/json"
+	err := c.post(AuthEndpoint+"/verify/trusteddevice/securitycode", data, hdr, nil)
+	if err != nil {
+		if apiErr, ok := err.(ErrAPI); ok {
+			if apiErr.Code == api.CodeWrongVerification2 {
+				return ErrWrongVerification
+			}
+		}
+	}
+	return err
 }
 
-// Device describes a user device like iPhone, iPad and so on
-type Device struct {
-	DeviceType  string
-	PhoneNumber string
+// IsTrustedSession returns true if current session is trusted.
+func (c *Client) IsTrustedSession() bool {
+	return c.data.HsaTrustedBrowser
+}
+
+// TrustSession requests session trust to avoid user log in going forward.
+func (c *Client) TrustSession() error {
+	hdr := c.getAuthHeaders(true)
+	err := c.post(AuthEndpoint+"/2sv/trust", nil, hdr, nil)
+	if err == nil {
+		err = c.authenticateWithToken()
+	}
+	return err
 }
 
 // TrustedDevices returns slice of trusted devices
-func (c *Client) TrustedDevices() ([]*Device, error) {
-	return nil, nil
+func (c *Client) TrustedDevices() ([]api.Device, error) {
+	var res *api.DeviceResponse
+	if err := c.get(SetupEndpoint+"/listDevices", &res); err != nil || res == nil {
+		return nil, errors.New("invalid response from listDevices")
+	}
+	if len(res.Devices) == 0 {
+		return nil, ErrNoDevices
+	}
+	return res.Devices, nil
 }
 
 // SendVerificationCode makes iCloud send verification code to a device
-func (c *Client) SendVerificationCode(d *Device) error {
+func (c *Client) SendVerificationCode(dev *api.Device) error {
+	var res *api.SuccessResponse
+	if err := c.post(SetupEndpoint+"/sendVerificationCode", dev, nil, &res); err != nil {
+		return err
+	}
+	if res == nil || !res.Success {
+		return errors.New("failed to send verification code")
+	}
 	return nil
 }
 
 // ValidateVerificationCode received on a device
-func (c *Client) ValidateVerificationCode(d *Device, code string) (bool, error) {
-	return false, nil
-}
-
-func (c *Client) getWebserviceURL(service string) string {
-	return "TODO!"
+func (c *Client) ValidateVerificationCode(dev *api.Device, code string) error {
+	d := dev.Dict()
+	d["verificationCode"] = code
+	d["trustBrowser"] = true
+	if err := c.post(SetupEndpoint+"/validateVerificationCode", d, nil, nil); err != nil {
+		if apiErr, ok := err.(ErrAPI); ok {
+			if apiErr.Code == api.CodeWrongVerification {
+				return ErrWrongVerification
+			}
+		}
+		return err
+	}
+	if err := c.TrustSession(); err != nil {
+		if apiErr, ok := err.(ErrAPI); ok {
+			if apiErr.Code == api.CodeNotFound {
+				log.Infof("You seem to lack trusted Apple devices. Authenticating again...")
+				err = c.Authenticate(false, "")
+			}
+		}
+		return err
+	}
+	if c.Requires2SA() {
+		return ErrLoginFailed
+	}
+	return nil
 }

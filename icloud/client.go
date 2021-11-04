@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ivandeex/go-icloud/icloud/api"
+
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -21,6 +23,7 @@ const (
 	AuthEndpoint  = "https://idmsa.apple.com/appleauth/auth"
 	HomeEndpoint  = "https://www.icloud.com"
 	SetupEndpoint = "https://setup.icloud.com/setup/ws/1"
+	DefUserAgent  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36"
 )
 
 // Client is iCloud API client
@@ -32,22 +35,26 @@ type Client struct {
 	withFamily  bool
 	session     sessionData
 	sessPath    string
-	data        dict
+	params      dict
+	data        *api.StateResponse
 }
 
-type dict map[string]interface{}
-
 // New returns API client
-func New(appleID, password string) (*Client, error) {
+func NewClient(appleID, password, dataRoot, userAgent string) (*Client, error) {
 	// defaults
 	const (
 		verify      = true
 		withFamily  = true
 		tempDirName = "icloud"
-		userAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36"
 	)
 
-	dataRoot := filepath.Join(os.TempDir(), tempDirName)
+	if userAgent == "" {
+		userAgent = DefUserAgent
+	}
+
+	if dataRoot == "" {
+		dataRoot = filepath.Join(os.TempDir(), tempDirName)
+	}
 	dataDir := filepath.Join(dataRoot, appleID)
 	err := os.MkdirAll(dataRoot, 0o777)
 	if err == nil {
@@ -66,21 +73,22 @@ func New(appleID, password string) (*Client, error) {
 	}
 	client.Jar = jar
 
-	c, err := NewWithOptions(client, appleID, password, userAgent, sessPath, verify, withFamily)
+	c, err := NewClientWithOptions(client, appleID, password, userAgent, sessPath, verify, withFamily)
 	if err != nil {
 		return nil, err
 	}
 	return c, nil
 }
 
-// NewWithOptions returns client with extra options
-func NewWithOptions(client *http.Client, appleID, password, userAgent, sessPath string, verify, withFamily bool) (*Client, error) {
+// NewClientWithOptions returns client with extra options
+func NewClientWithOptions(client *http.Client, appleID, password, userAgent, sessPath string, verify, withFamily bool) (*Client, error) {
 	c := &Client{
 		Client:      client,
 		accountName: appleID,
 		password:    password,
 		withFamily:  withFamily,
 		sessPath:    sessPath,
+		data:        &api.StateResponse{},
 	}
 	if err := c.session.load(sessPath); err != nil {
 		return nil, errors.Wrapf(err, "cannot load session from %s", sessPath)
@@ -91,25 +99,55 @@ func NewWithOptions(client *http.Client, appleID, password, userAgent, sessPath 
 	return c, nil
 }
 
+// get request
+func (c *Client) get(url string, res interface{}) error {
+	_, err := c.request(http.MethodGet, url, nil, nil, res, false)
+	return err
+}
+
 // post request
-func (c *Client) post(url string, data dict, hdr dict, out interface{}) error {
-	_, err := c.request(http.MethodPost, url, data, hdr, out, false)
+func (c *Client) post(url string, data interface{}, hdr dict, res interface{}) error {
+	_, err := c.request(http.MethodPost, url, data, hdr, res, false)
 	return err
 }
 
 // request will send a get/post request with retries
-func (c *Client) request(method, url string, data dict, hdr dict, out interface{}, retried bool) ([]byte, error) {
-	log.Debugf("%s %s %s", method, url, Marshal(data))
+func (c *Client) request(method, url string, data interface{}, hdr dict, out interface{}, retried bool) ([]byte, error) {
 	var (
-		dataIn []byte
-		err    error
+		in    []byte
+		inStr string
+		err   error
 	)
-	if data != nil {
-		if dataIn, err = json.Marshal(data); err != nil {
-			return nil, err
+	switch d := data.(type) {
+	case []byte:
+		in = d
+		inStr = string(d)
+	case string:
+		in = []byte(d)
+		inStr = d
+	default:
+		if d == nil {
+			inStr = "null"
+		} else {
+			in, err = json.Marshal(d)
+			inStr = string(Marshal(d))
 		}
 	}
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(dataIn))
+
+	sep := "?"
+	if strings.Contains(url, "?") {
+		sep = "&"
+	}
+	for key, val := range c.params {
+		url += fmt.Sprintf("%s%s=%s", sep, key, val)
+		sep = "&"
+	}
+
+	log.Debugf("%s %s %s", method, url, inStr)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(method, url, bytes.NewBuffer(in))
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +163,6 @@ func (c *Client) request(method, url string, data dict, hdr dict, out interface{
 	}
 
 	res, err := c.Client.Do(req)
-	log.Tracef("---\n dataIn: %s\n request: %v\n err: %v\n response: %v\n---", dataIn, req, err, res)
 	if err != nil {
 		return nil, err
 	}
@@ -134,8 +171,8 @@ func (c *Client) request(method, url string, data dict, hdr dict, out interface{
 	if err := c.session.save(c.sessPath); err != nil {
 		return nil, err
 	}
-	log.Debugf("Saved session data to file %s", c.sessPath)
-	log.Debugf("Cookies saved aitomatically")
+	log.Tracef("Saved session data to file %s", c.sessPath)
+	log.Tracef("Cookies saved aitomatically")
 
 	code := res.StatusCode
 	strCode := strconv.Itoa(code)
@@ -145,24 +182,24 @@ func (c *Client) request(method, url string, data dict, hdr dict, out interface{
 	case 421, 450, 500:
 		isAuthErr = true
 	}
-	OK := code < 400
-	clength := res.Header.Get("Content-Length")
-	dataOut, err := io.ReadAll(res.Body)
+	body, err := io.ReadAll(res.Body)
+	if err == nil {
+		err = res.Body.Close()
+	}
 	if err != nil {
 		return nil, err
 	}
-	_ = res.Body.Close()
+	clength := res.Header.Get("Content-Length")
 	if clength == "" {
-		clength = strconv.Itoa(len(dataOut)) + "."
+		clength = strconv.Itoa(len(body)) + ".."
 	}
 	ctype := strings.Split(res.Header.Get("Content-Type"), ";")[0]
 	isJSON := ctype == "application/json" || ctype == "text/json"
+	log.Debugf("Results: code=%d noauth=%v json=%v len=%s", code, isAuthErr, isJSON, clength)
 
-	log.Debugf("Results: OK=%v AuthErr=%v IsJSON=%v Code=%d Length=%s",
-		OK, isAuthErr, isJSON, code, clength)
-
-	if !OK && (!isJSON || isAuthErr) {
-		isFindme := strings.Contains(url, c.getWebserviceURL("findme"))
+	if code >= 400 && (!isJSON || isAuthErr) {
+		findmeURL, err := c.getWebserviceURL("findme")
+		isFindme := err == nil && strings.Contains(url, findmeURL)
 		if isFindme && !retried && code == 450 {
 			log.Debug("Re-authenticating Find My iPhone service")
 			if err := c.Authenticate(true, "find"); err != nil {
@@ -174,78 +211,62 @@ func (c *Client) request(method, url string, data dict, hdr dict, out interface{
 			log.Debugf("Auth error %s (%d). Retrying...", status, code)
 			return c.request(method, url, data, hdr, out, true)
 		}
-		return nil, c.translateErrors(code, status, status)
+		return nil, c.translateError(code, status, status)
 	}
 
 	if !isJSON {
-		return dataOut, nil
+		return body, nil
 	}
-
-	if err = c.handleReason(dataOut); err != nil {
+	if err = c.decodeError(body); err != nil {
 		return nil, err
 	}
-	if out != nil {
-		err = json.Unmarshal(dataOut, &out)
-		if err != nil || out == nil {
+	if log.IsLevelEnabled(log.DebugLevel) {
+		var d dict
+		if err = json.Unmarshal(body, &d); err != nil || d == nil {
 			log.Warn("Failed to parse JSON response")
 			return nil, err
 		}
-		log.Debugf("json response: %s", string(Marshal(out)))
+		log.Debugf("json response: %s", Marshal(d))
 	}
-	return dataOut, nil
-}
-
-func (c *Client) handleReason(dataOut []byte) error {
-	var data map[string]interface{}
-	if err := json.Unmarshal(dataOut, &data); err != nil || data == nil {
-		return nil
-	}
-	out := map[string]string{}
-	for k, v := range data {
-		if s, ok := v.(string); ok {
-			out[k] = s
+	if out != nil {
+		if err = json.Unmarshal(body, out); err != nil {
+			log.Error("Failed to parse JSON response")
+			return nil, err
 		}
 	}
+	return body, nil
+}
 
+func (c *Client) decodeError(out []byte) error {
+	e := &api.ErrorResponse{}
+	if err := json.Unmarshal(out, &e); err != nil || e == nil {
+		return nil
+	}
 	var reason string
-	if reason == "" {
-		reason = out["errorMessage"]
+	for _, v := range []string{e.ErrorMessage, e.Reason, e.ErrorReason, e.Error} {
+		if reason == "" {
+			reason = v
+		}
 	}
-	if reason == "" {
-		reason = out["reason"]
-	}
-	if reason == "" {
-		reason = out["errorReason"]
-	}
-	if reason == "" {
-		reason = out["error"]
-	}
-	//if (reason is not string) { reason = "Unknown reason" }
 	if reason == "" {
 		return nil
 	}
-
-	var status string
-	status = out["errorCode"]
-	if status == "" {
-		status = out["serverErrorCode"]
-	}
 	var code int
-	code, err := strconv.Atoi(status)
-	if err == nil {
-		status = ""
+	code = e.Code
+	if code == 0 {
+		code = e.ServerCode
 	}
-	return c.translateErrors(code, status, reason)
+	return c.translateError(code, "", reason)
 }
 
-func (c *Client) translateErrors(code int, status string, reason string) error {
+func (c *Client) translateError(code int, status string, reason string) error {
 	if c.Requires2SA() && reason == "Missing X-APPLE-WEBAUTH-TOKEN cookie" {
 		return Err2SARequired
 	}
 	switch status {
 	case "ZONE_NOT_FOUND", "AUTHENTICATION_FAILED":
 		reason = "Please log into https://icloud.com/ to manually finish setting up your iCloud service"
-		return NewErrAPIResponse(code, status, reason, false)
+		return NewErrAPI(code, status, reason, false)
 	case "ACCESS_DENIED":
 		reason += ".  Please wait a few minutes then try again"
 		reason += ". The remote servers might be trying to throttle requests."
@@ -254,5 +275,5 @@ func (c *Client) translateErrors(code int, status string, reason string) error {
 	case 421, 450, 500:
 		reason = "Authentication required for Account."
 	}
-	return NewErrAPIResponse(code, status, reason, false)
+	return NewErrAPI(code, status, reason, false)
 }

@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/ivandeex/go-icloud/icloud"
+	icloudapi "github.com/ivandeex/go-icloud/icloud/api"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -60,7 +61,6 @@ func rootMain(command *cobra.Command, _ []string) error {
 	log.SetFormatter(&log.TextFormatter{
 		ForceColors:     true,
 		DisableQuote:    true,
-		PadLevelText:    true,
 		FullTimestamp:   true,
 		TimestampFormat: "15:04:05.999",
 	})
@@ -70,7 +70,7 @@ func rootMain(command *cobra.Command, _ []string) error {
 		return errors.New("username or password was not supplied")
 	}
 
-	api, err := icloud.New(username, password)
+	api, err := icloud.NewClient(username, password, "", "")
 	if err == nil {
 		err = api.Authenticate(false, "")
 	}
@@ -78,5 +78,39 @@ func rootMain(command *cobra.Command, _ []string) error {
 		return err
 	}
 
+	if api.Requires2SA() {
+		log.Warn("Two-step authentication required.")
+		var devices []icloudapi.Device
+		if devices, err = api.TrustedDevices(); err != nil {
+			return err
+		}
+		log.Warnf("Your trusted devices are: %#v", devices)
+		dev := &devices[0]
+		log.Warnf("Sending verification code to the first device...")
+		if err = api.SendVerificationCode(dev); err != nil {
+			return err
+		}
+		code := icloud.ReadLine("Please enter validation code: ")
+		if err = api.ValidateVerificationCode(dev, code); err != nil {
+			return errors.Wrap(err, "failed to verify verification code")
+		}
+	}
+
+	if api.Requires2FA() {
+		log.Warnf("Two-factor authentication required.")
+		code := icloud.ReadLine("Enter the code you received of one of your approved devices: ")
+		if err = api.Validate2FACode(code); err != nil {
+			return errors.Wrap(err, "failed to verify security code")
+		}
+		if !api.IsTrustedSession() {
+			log.Infof("Session is not trusted. Requesting trust...")
+			if err = api.TrustSession(); err != nil {
+				log.Errorf("Failed to request trust. You will likely be prompted for the code again in the coming weeks")
+				return err
+			}
+		}
+	}
+
+	log.Infof("Successfully authenticated")
 	return nil
 }

@@ -1,10 +1,16 @@
 package icloud
 
 import (
+	"bufio"
 	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
 
 	log "github.com/sirupsen/logrus"
 )
+
+type dict map[string]interface{}
 
 var Debug = false
 
@@ -22,4 +28,24 @@ func Marshal(v interface{}) []byte {
 	}
 	data = append(data, '\n')
 	return data
+}
+
+func (c *Client) getWebserviceURL(service string) (string, error) {
+	return c.data.Webservices.URL(service)
+}
+
+func ReadLine(prompt string) string {
+	var (
+		line string
+		err  error
+	)
+	for line == "" {
+		fmt.Print(prompt)
+		line, err = bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil {
+			log.Fatalf("Failed to read line: %v", err)
+		}
+		line = strings.TrimSpace(line)
+	}
+	return line
 }

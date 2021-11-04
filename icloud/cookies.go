@@ -1,6 +1,7 @@
 package icloud
 
 import (
+	"net/http"
 	"net/http/cookiejar"
 	"os"
 
@@ -9,7 +10,7 @@ import (
 	netscapeCookieJar "github.com/vanym/golang-netscape-cookiejar"
 )
 
-func newCookieJar(path string) (*netscapeCookieJar.Jar, error) {
+func newCookieJar(path string) (http.CookieJar, error) {
 	baseJar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, errors.Wrapf(err, "cannot create basic cookie jar")
