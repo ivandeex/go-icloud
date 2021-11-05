@@ -11,10 +11,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ivandeex/go-icloud/icloud/api"
-
 	"github.com/google/uuid"
-	"github.com/pkg/errors"
+	"github.com/ivandeex/go-icloud/icloud/api"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -61,7 +59,7 @@ func NewClient(appleID, password, dataRoot, userAgent string) (*Client, error) {
 		err = os.MkdirAll(dataDir, 0o700)
 	}
 	if err != nil {
-		return nil, errors.Wrapf(err, "cannot create data directory %s", dataDir)
+		return nil, fmt.Errorf("cannot create data directory %s: %w", dataDir, err)
 	}
 	cookiePath := filepath.Join(dataDir, "cookies.txt")
 	sessPath := filepath.Join(dataDir, "session.txt")
@@ -69,7 +67,7 @@ func NewClient(appleID, password, dataRoot, userAgent string) (*Client, error) {
 	client := &http.Client{}
 	jar, err := newCookieJar(cookiePath)
 	if err != nil {
-		return nil, errors.Wrapf(err, "cannot load cookies from %s", cookiePath)
+		return nil, fmt.Errorf("cannot load cookies from %s: %w", cookiePath, err)
 	}
 	client.Jar = jar
 
@@ -91,7 +89,7 @@ func NewClientWithOptions(client *http.Client, appleID, password, userAgent, ses
 		data:        &api.StateResponse{},
 	}
 	if err := c.session.load(sessPath); err != nil {
-		return nil, errors.Wrapf(err, "cannot load session from %s", sessPath)
+		return nil, fmt.Errorf("cannot load session from %s: %w", sessPath, err)
 	}
 	if c.session.ClientID == "" {
 		c.session.ClientID = "auth-" + strings.ToLower(uuid.NewString())
@@ -150,7 +148,7 @@ func (c *Client) request(method, url string, data interface{}, hdr dict, out int
 		sep = "&"
 	}
 
-	log.Debugf("%s %s %s", method, url, inStr)
+	log.Tracef("%s %s %s", method, url, inStr)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +180,7 @@ func (c *Client) request(method, url string, data interface{}, hdr dict, out int
 	log.Tracef("Cookies saved aitomatically")
 
 	if streamPtr, wantStream := out.(*io.ReadCloser); wantStream {
-		log.Debugf("streaming data from url %q", url)
+		log.Tracef("streaming data from url %q", url)
 		*streamPtr = res.Body
 		return nil, nil
 	}
@@ -208,7 +206,7 @@ func (c *Client) request(method, url string, data interface{}, hdr dict, out int
 	}
 	ctype := strings.Split(res.Header.Get("Content-Type"), ";")[0]
 	isJSON := ctype == "application/json" || ctype == "text/json"
-	log.Debugf("Results: code=%d noauth=%v json=%v len=%s", code, isAuthErr, isJSON, clength)
+	log.Tracef("Results: code=%d noauth=%v json=%v len=%s", code, isAuthErr, isJSON, clength)
 
 	if code >= 400 && (!isJSON || isAuthErr) {
 		findmeURL, err := c.getWebserviceURL("findme")
@@ -249,9 +247,9 @@ func (c *Client) request(method, url string, data interface{}, hdr dict, out int
 			t = "array"
 		}
 		if t != "" {
-			log.Debugf("JSON %s response: %s", t, string(b))
+			log.Tracef("JSON %s response: %s", t, string(b))
 		} else {
-			log.Warnf("Invalid JSON response: %s", string(body))
+			log.Errorf("Invalid JSON response: %s", string(body))
 		}
 	}
 

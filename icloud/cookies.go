@@ -1,11 +1,11 @@
 package icloud
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"os"
 
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	netscapeCookieJar "github.com/vanym/golang-netscape-cookiejar"
 )
@@ -13,7 +13,7 @@ import (
 func newCookieJar(path string) (http.CookieJar, error) {
 	baseJar, err := cookiejar.New(nil)
 	if err != nil {
-		return nil, errors.Wrapf(err, "cannot create basic cookie jar")
+		return nil, fmt.Errorf("cannot create basic cookie jar: %w", err)
 	}
 	opt := netscapeCookieJar.Options{
 		SubJar:        baseJar,
@@ -22,7 +22,7 @@ func newCookieJar(path string) (http.CookieJar, error) {
 	}
 	jar, err := netscapeCookieJar.New(&opt)
 	if err != nil {
-		return nil, errors.Wrapf(err, "cannot create netscape cookie jar")
+		return nil, fmt.Errorf("cannot create on-disk cookie jar: %w", err)
 	}
 	file, err := os.Open(path)
 	if err == nil {

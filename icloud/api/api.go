@@ -1,9 +1,8 @@
 package api
 
 import (
+	"fmt"
 	"strings"
-
-	"github.com/pkg/errors"
 )
 
 type dict map[string]interface{}
@@ -203,7 +202,7 @@ func (w *Webservices) URL(service string) (url string, err error) {
 		url = w.Uploadimagews.URL
 	}
 	if url == "" {
-		err = errors.Errorf("service %q does not have an URL", service)
+		err = fmt.Errorf("service %q does not have an URL", service)
 	}
 	return
 }
@@ -243,7 +242,7 @@ func (a *Apps) AllowsOneFactor(service string) (can bool, err error) {
 	case "settings":
 		can = a.Settings.CanLaunchWithOneFactor
 	default:
-		err = errors.Errorf("service %q does not allow 1-factor", service)
+		err = fmt.Errorf("service %q does not allow 1-factor", service)
 	}
 	return
 }

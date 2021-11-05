@@ -1,10 +1,9 @@
 package icloud
 
 import (
+	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/pkg/errors"
 )
 
 type ErrApple error

@@ -1,8 +1,9 @@
 package icloud
 
 import (
+	"errors"
+
 	"github.com/ivandeex/go-icloud/icloud/api"
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 

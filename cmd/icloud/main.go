@@ -1,12 +1,12 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"regexp"
 
 	"github.com/ivandeex/go-icloud/icloud"
-	icloudapi "github.com/ivandeex/go-icloud/icloud/api"
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -71,41 +71,41 @@ func rootMain(command *cobra.Command, _ []string) error {
 		return errors.New("username or password was not supplied")
 	}
 
-	api, err := icloud.NewClient(username, password, "", "")
+	cli, err := icloud.NewClient(username, password, "", "")
 	if err == nil {
-		err = api.Authenticate(false, "")
+		err = cli.Authenticate(false, "")
 	}
 	if err != nil {
 		return err
 	}
 
-	if api.Requires2SA() {
+	if cli.Requires2SA() {
 		log.Warn("Two-step authentication required.")
-		var devices []icloudapi.Device
-		if devices, err = api.TrustedDevices(); err != nil {
+		devices, err := cli.TrustedDevices()
+		if err != nil {
 			return err
 		}
 		log.Warnf("Your trusted devices are: %#v", devices)
 		dev := &devices[0]
 		log.Warnf("Sending verification code to the first device...")
-		if err = api.SendVerificationCode(dev); err != nil {
+		if err = cli.SendVerificationCode(dev); err != nil {
 			return err
 		}
 		code := icloud.ReadLine("Please enter validation code: ")
-		if err = api.ValidateVerificationCode(dev, code); err != nil {
-			return errors.Wrap(err, "failed to verify verification code")
+		if err = cli.ValidateVerificationCode(dev, code); err != nil {
+			return fmt.Errorf("failed to verify verification code: %w", err)
 		}
 	}
 
-	if api.Requires2FA() {
+	if cli.Requires2FA() {
 		log.Warnf("Two-factor authentication required.")
 		code := icloud.ReadLine("Enter the code you received of one of your approved devices: ")
-		if err = api.Validate2FACode(code); err != nil {
-			return errors.Wrap(err, "failed to verify security code")
+		if err = cli.Validate2FACode(code); err != nil {
+			return fmt.Errorf("failed to verify security code: %w", err)
 		}
-		if !api.IsTrustedSession() {
+		if !cli.IsTrustedSession() {
 			log.Infof("Session is not trusted. Requesting trust...")
-			if err = api.TrustSession(); err != nil {
+			if err = cli.TrustSession(); err != nil {
 				log.Errorf("Failed to request trust. You will likely be prompted for the code again in the coming weeks")
 				return err
 			}
@@ -114,13 +114,13 @@ func rootMain(command *cobra.Command, _ []string) error {
 
 	log.Infof("Successfully authenticated")
 
-	drive, err := icloud.NewDrive(api)
+	drive, err := icloud.NewDrive(cli)
 	if err != nil {
-		return errors.Wrap(err, "connecting to drive service")
+		return fmt.Errorf("cannot connect to drive service: %w", err)
 	}
 	root, err := drive.Root()
 	if err != nil {
-		return errors.Wrap(err, "obtaining drive root")
+		return fmt.Errorf("cannot obtain iDrive root: %w", err)
 	}
 	dir, _ := root.Dir()
 	log.Infof("root name %q type %q dir %q", root.Name(), root.Type(), dir)
@@ -130,22 +130,22 @@ func rootMain(command *cobra.Command, _ []string) error {
 
 	subdir, err := root.Get(dir[0])
 	if err != nil {
-		return errors.Wrapf(err, "cannot read subdir %q", dir[0])
+		return fmt.Errorf("%s: cannot read subdir: %w", dir[0], err)
 	}
 	dir, _ = subdir.Dir()
 	log.Infof("subdir name %q dir %q", subdir.Name(), dir)
 	if len(dir) == 0 {
-		return errors.Errorf("folder %q is empty", subdir.Name())
+		return fmt.Errorf("%s: folder is empty", subdir.Name())
 	}
 
 	name, path := dir[0], "test.log"
 	file, err := subdir.Get(name)
 	if err != nil {
-		return errors.Wrapf(err, "file %q not found in folder %q", name, subdir.Name())
+		return fmt.Errorf("file %q not found in folder %q: %w", name, subdir.Name(), err)
 	}
 	err = file.Download(path)
 	if err != nil {
-		return errors.Wrapf(err, "cannot download %q", name)
+		return fmt.Errorf("%s: cannot download: %w", name, err)
 	}
 	log.Infof("saved %q into %q", name, path)
 

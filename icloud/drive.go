@@ -2,6 +2,8 @@ package icloud
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -13,7 +15,6 @@ import (
 	"time"
 
 	"github.com/ivandeex/go-icloud/icloud/api"
-	"github.com/pkg/errors"
 )
 
 // DriveService describes the Drive iCloud service
@@ -174,7 +175,7 @@ func (d *DriveService) getFile(fileID string) (io.ReadCloser, error) {
 	var docResult *api.DriveDocResult
 	docURL := d.docRoot + "/ws/com.apple.CloudDocs/download/by_id?document_id=" + fileID
 	if err := d.c.get(docURL, &docResult); err != nil {
-		return nil, errors.Wrapf(err, "cannot get download url for id %q", fileID)
+		return nil, fmt.Errorf("cannot get download url for id %q: %w", fileID, err)
 	}
 	var fileURL string
 	if docResult != nil {
@@ -185,7 +186,7 @@ func (d *DriveService) getFile(fileID string) (io.ReadCloser, error) {
 	}
 	var stream io.ReadCloser
 	if err := d.c.get(fileURL, &stream); err != nil {
-		return nil, errors.Wrapf(err, "failed to download from id %q", fileID)
+		return nil, fmt.Errorf("failed to download from id %q: %w", fileID, err)
 	}
 	return stream, nil
 }
@@ -199,7 +200,7 @@ func (n *DriveNode) Download(path string) error {
 	defer func() { _ = in.Close() }()
 	out, err := os.Create(path)
 	if err != nil {
-		return errors.Wrapf(err, "cannot create file %s", path)
+		return fmt.Errorf("%s: cannot create file: %w", path, err)
 	}
 	_, err = io.Copy(out, in)
 	errClose := out.Close()
