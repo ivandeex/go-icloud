@@ -49,4 +49,7 @@ var (
 	ErrNoStoredPassword  = NewErr("no stored icloud password available")
 	ErrNoDevices         = NewErr("no icloud device")
 	ErrWrongVerification = NewErr("wrong verification code")
+	ErrNotFound          = NewErr("path not found")
+	ErrNotDir            = NewErr("path is not a directory")
+	ErrNotFile           = NewErr("path is not a file")
 )

@@ -113,7 +113,7 @@ func (n *DriveNode) LastOpened() time.Time { return n.i.LastOpened }
 // Children of node
 func (n *DriveNode) Children() ([]*DriveNode, error) {
 	if !n.IsDir() {
-		return nil, errors.New("must be a folder to list children")
+		return nil, ErrNotDir
 	}
 	if !n.ready {
 		item, err := n.d.getNodeData(n.i.DocID)
@@ -155,13 +155,13 @@ func (n *DriveNode) Get(name string) (*DriveNode, error) {
 			return child, nil
 		}
 	}
-	return nil, errors.New("child not found")
+	return nil, ErrNotFound
 }
 
 // Open file for reading
 func (n *DriveNode) Open() (io.ReadCloser, error) {
 	if n.IsDir() {
-		return nil, errors.New("cannot open folder")
+		return nil, ErrNotFile
 	}
 	if n.Size() <= 0 {
 		// iCloud returns 400 Bad Request for empty files
@@ -226,7 +226,7 @@ func (n *DriveNode) Upload(path string) error {
 // PutStream uploads a file stream to a folder
 func (n *DriveNode) PutStream(in io.Reader, path string, size int64, mtime time.Time) error {
 	if !n.IsDir() {
-		return errors.New("can only upload to a folder")
+		return ErrNotDir
 	}
 	_, err := n.d.sendFile(n.i.DocID, in, path, size, mtime)
 	return err

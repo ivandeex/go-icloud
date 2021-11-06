@@ -176,8 +176,7 @@ func (c *Client) request(method, url string, data interface{}, hdr dict, out int
 	if err := c.session.save(c.sessPath); err != nil {
 		return nil, err
 	}
-	log.Tracef("Saved session data to file %s", c.sessPath)
-	log.Tracef("Cookies saved aitomatically")
+	log.Tracef("Saved session in %s", c.sessPath)
 
 	if streamPtr, wantStream := out.(*io.ReadCloser); wantStream {
 		log.Tracef("streaming data from url %q", url)
