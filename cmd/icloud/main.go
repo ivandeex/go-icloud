@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 
 	"github.com/ivandeex/go-icloud/icloud"
 	log "github.com/sirupsen/logrus"
@@ -63,7 +64,7 @@ func rootMain(command *cobra.Command, _ []string) error {
 		ForceColors:     true,
 		DisableQuote:    true,
 		FullTimestamp:   true,
-		TimestampFormat: "15:04:05.999",
+		TimestampFormat: "06-01-02 15:04:05.000",
 	})
 	icloud.Debug = level >= log.DebugLevel
 
@@ -122,18 +123,34 @@ func rootMain(command *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("cannot obtain iDrive root: %w", err)
 	}
+
 	dir, _ := root.Dir()
-	log.Infof("root name %q type %q dir %q", root.Name(), root.Type(), dir)
+	for _, name := range dir {
+		if name == "" || strings.HasPrefix(name, "rclone-test") {
+			if node, err := root.Get(name); err == nil {
+				_ = node.Delete()
+				log.Infof("remove test artifact %q", name)
+			}
+		}
+	}
+
+	log.Infof("root name %q type %q list %q", root.Name(), root.Type(), dir)
+	dir, _ = root.Dir()
 	if len(dir) == 0 {
 		return errors.New("root folder is empty")
 	}
-
-	subdir, err := root.Get(dir[0])
-	if err != nil {
-		return fmt.Errorf("%s: cannot read subdir: %w", dir[0], err)
+	subdir, err := root.Get("test")
+	if err != nil || !subdir.IsDir() || subdir.Name() != "test" {
+		return fmt.Errorf("cannot read test subdir: %w", err)
 	}
+
+	if file, err := subdir.Get(""); err == nil {
+		log.Infof("remove test artifact with empty name")
+		_ = file.Delete()
+		subdir.Stale()
+	}
+
 	dir, _ = subdir.Dir()
-	log.Infof("subdir name %q dir %q", subdir.Name(), dir)
 	if len(dir) == 0 {
 		return fmt.Errorf("%s: folder is empty", subdir.Name())
 	}
@@ -161,6 +178,8 @@ func rootMain(command *cobra.Command, _ []string) error {
 	}
 	err = subdir.Upload(path)
 	log.Infof("uploading %q returns %v", path, err)
+	dir, _ = subdir.Dir()
+	log.Infof("final subdir list %q", dir)
 
 	return err
 }
