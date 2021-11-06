@@ -110,6 +110,11 @@ func (n *DriveNode) Modified() time.Time { return n.i.Modified }
 // LastOpened time of node
 func (n *DriveNode) LastOpened() time.Time { return n.i.LastOpened }
 
+// Stale forces node refresh
+func (n *DriveNode) Stale() {
+	n.ready = false
+}
+
 // Children of node
 func (n *DriveNode) Children() ([]*DriveNode, error) {
 	if !n.IsDir() {
@@ -228,17 +233,18 @@ func (n *DriveNode) PutStream(in io.Reader, path string, size int64, mtime time.
 	if !n.IsDir() {
 		return ErrNotDir
 	}
-	_, err := n.d.sendFile(n.i.DocID, in, path, size, mtime)
+	err := n.d.sendFile(n.i.DocID, in, path, size, mtime)
+	n.ready = false // force refresh
 	return err
 }
 
 // sendFile sends new file to iCloud Drive
-func (d *DriveService) sendFile(folderID string, in io.Reader, path string, size int64, mtime time.Time) (dict, error) {
+func (d *DriveService) sendFile(folderID string, in io.Reader, path string, size int64, mtime time.Time) error {
 	name := filepath.Base(path)
 	mimeType := mime.TypeByExtension(filepath.Ext(name))
 	docID, contentURL, err := d.getUploadContentWsURL(name, mimeType, size)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// Prepare multipart body
@@ -257,13 +263,13 @@ func (d *DriveService) sendFile(folderID string, in io.Reader, path string, size
 		}
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	hdr := dict{"Content-Type": mpWriter.FormDataContentType()}
 	var res *api.DriveUploadFileResult
 	if err := d.c.post(contentURL, body, hdr, &res); err != nil {
-		return nil, err
+		return err
 	}
 	return d.updateContentWs(folderID, res, docID, name, mtime)
 }
@@ -301,7 +307,7 @@ func (d *DriveService) getUploadContentWsURL(name string, mimeType string, size 
 	return docID, docURL, nil
 }
 
-func (d *DriveService) updateContentWs(folderID string, uploadResult *api.DriveUploadFileResult, docID string, path string, mtime time.Time) (dict, error) {
+func (d *DriveService) updateContentWs(folderID string, uploadResult *api.DriveUploadFileResult, docID string, path string, mtime time.Time) error {
 	fi := &uploadResult.SingleFile
 	baseData := dict{
 		"signature":           fi.FileChecksum,
@@ -335,11 +341,7 @@ func (d *DriveService) updateContentWs(folderID string, uploadResult *api.DriveU
 
 	url := d.docRoot + "/ws/com.apple.CloudDocs/update/documents"
 	hdr := dict{"Content-Type": "text/plain"} // sic!
-	var res dict
-	if err := d.c.post(url, data, hdr, &res); res != nil {
-		return nil, err
-	}
-	return res, nil
+	return d.c.post(url, data, hdr, nil)
 }
 
 // getTokenFromCookie returns the drive service token
@@ -359,6 +361,7 @@ func (d *DriveService) getTokenFromCookie() string {
 
 // Delete an iCloud Drive item
 func (n *DriveNode) Delete() error {
+	// TODO force parent refresh
 	return n.d.moveToTrash(n.i.DriveID, n.i.Etag)
 }
 
@@ -377,6 +380,7 @@ func (d *DriveService) moveToTrash(nodeID, etag string) error {
 
 // Mkdir creates new directory
 func (n *DriveNode) Mkdir(folder string) error {
+	n.ready = false // force parent refresh
 	return n.d.createFolders(n.i.DriveID, folder)
 }
 
@@ -395,6 +399,7 @@ func (d *DriveService) createFolders(parent, name string) error {
 
 // Rename a node
 func (n *DriveNode) Rename(newName string) error {
+	// TODO force parent refresh
 	return n.d.renameItems(n.i.DriveID, n.i.Etag, newName)
 }
 
@@ -406,6 +411,5 @@ func (d *DriveService) renameItems(nodeID, etag, name string) error {
 	data := dict{
 		"items": []dict{node},
 	}
-
 	return d.c.post(d.svcRoot+"/renameItems", data, nil, nil)
 }
